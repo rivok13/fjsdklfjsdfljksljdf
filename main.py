@@ -11,7 +11,10 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 import aiosqlite
-import google.generativeai as genai
+
+# ---------- НОВЫЙ GOOGLE GENAI SDK ----------
+from google import genai
+from google.genai import types
 
 # ---------- НАСТРОЙКИ ----------
 TOKEN = "8354719198:AAG3ZYYPnsYpoG_sRCYsBSJiApxr_VrsPAU"
@@ -21,9 +24,8 @@ DB_NAME = "bot_schedule.db"
 
 MSK = timezone(timedelta(hours=3))
 
-# Инициализация Gemini
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+# Инициализация Gemini-клиента
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -181,9 +183,9 @@ async def find_knowledge_with_ai(chat_id: int, user_question: str):
     """ИИ определяет, какой записи из базы знаний соответствует вопрос."""
     entries = await get_all_knowledge(chat_id)
     if not entries:
+        logging.info(f"AI: нет записей в базе знаний для чата {chat_id}")
         return None
 
-    # Строим описание для промпта
     items_desc = []
     for eid, subject, keywords, response in entries:
         kw = keywords if keywords else subject
@@ -199,21 +201,31 @@ async def find_knowledge_with_ai(chat_id: int, user_question: str):
         f"Вопрос: {user_question}"
     )
 
+    logging.info(f"AI prompt:\n{prompt}")  # отладка
+
     try:
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",   # можно заменить на "gemini-1.5-flash"
+            contents=prompt
+        )
         text = response.text.strip()
-        # Парсим ответ ИИ
+        logging.info(f"AI ответ: {text}")  # отладка
+
         if text.startswith("ID:") and ",Уверенность:" in text:
             parts = text.split(",")
             id_part = parts[0].split(":")[1]
             conf_part = parts[1].split(":")[1]
             entry_id = int(id_part)
             confidence = int(conf_part)
-            if entry_id > 0 and confidence >= 70:
-                # Ищем ответ в локальной базе
+            logging.info(f"AI распознал ID={entry_id}, уверенность={confidence}")
+            if entry_id > 0 and confidence >= 60:   # порог для теста снижен до 60
                 for eid, subject, keywords, resp in entries:
                     if eid == entry_id:
                         return resp
+            else:
+                logging.info("AI: уверенность ниже порога или ID=0")
+        else:
+            logging.warning(f"AI: неожиданный формат ответа: {text}")
         return None
     except Exception as e:
         logging.error(f"AI search error: {e}")
@@ -433,7 +445,6 @@ async def cancel_handler(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 # ========== ДОБАВЛЕНИЕ ЗАНЯТИЯ ==========
-# (весь блок остаётся без изменений)
 @router.callback_query(F.data == "add_schedule", F.from_user.id == ADMIN_ID)
 async def add_start(callback: types.CallbackQuery, state: FSMContext):
     groups = await get_groups()

@@ -1,3 +1,3 @@
 aiogram>=3.0
 aiosqlite
-google-generativeai
+google-genai
